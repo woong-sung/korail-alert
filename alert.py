@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Korail availability watcher. Python 3.9+."""
+"""Read-only Korail availability watcher. Python 3.11+."""
 import argparse
 import datetime as dt
 import logging
@@ -13,16 +13,32 @@ from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
-from korail2 import Korail, AdultPassenger, TrainType, NoResultsError, NeedToLoginError
+from pykorail import (
+    AccessRestrictedError, AdultPassenger, Korail, NeedToLoginError,
+    NoResultsError, TrainType,
+)
 
 STOP = threading.Event()
 LOG = logging.getLogger('korail-alert')
+DEVICE_ID_FILE = Path(__file__).with_name('.korail-android-id')
 
 
-class TimedSession(requests.Session):
-    def request(self, *args, **kwargs):
-        kwargs.setdefault('timeout', 25)
-        return super().request(*args, **kwargs)
+def create_client(korail_id, korail_password):
+    android_id = DEVICE_ID_FILE.read_text(encoding='ascii').strip() if DEVICE_ID_FILE.exists() else None
+    client = Korail(android_id=android_id)
+    if android_id is None:
+        DEVICE_ID_FILE.write_text(client.android_id + '\n', encoding='ascii')
+        try:
+            DEVICE_ID_FILE.chmod(0o600)
+        except OSError:
+            pass
+        LOG.info('새 코레일 기기 ID를 생성해 %s에 저장했습니다.', DEVICE_ID_FILE.name)
+    try:
+        client.login(korail_id, korail_password)
+    except BaseException:
+        client.close()
+        raise
+    return client
 
 
 def notify(message):
@@ -86,20 +102,16 @@ def main():
             return
         try:
             if client is None:
-                client = Korail(os.environ['KORAIL_ID'], os.environ['KORAIL_PASSWORD'], auto_login=False)
-                # Bound requests made by this library, including login.
-                headers = dict(client._session.headers)
-                client._session = TimedSession()
-                client._session.headers.update(headers)
-                if not client.login():
-                    raise RuntimeError('login failed')
+                client = create_client(os.environ['KORAIL_ID'], os.environ['KORAIL_PASSWORD'])
             matched = set()
             # Query each exact time separately; search_train returns at most 10 results.
             for target in pending:
                 if STOP.is_set():
                     break
                 try:
-                    trains = client.search_train(dep, arr, date, target + '00',
+                    depart_after = dt.datetime.combine(
+                        day, dt.time(int(target[:2]), int(target[2:])), tzinfo=now.tzinfo)
+                    trains = client.trains.search(dep, arr, depart_after=depart_after,
                         train_type=TrainType.KTX, passengers=[AdultPassenger(adults)], include_no_seats=True)
                 except NoResultsError:
                     trains = []
@@ -119,14 +131,24 @@ def main():
                 if len(pending) > 1 and target != pending[-1]:
                     STOP.wait(3)
             failures = 0
+        except AccessRestrictedError as exc:
+            if client is not None:
+                client.close()
+            LOG.error('코레일 접근 제한으로 감시를 중단합니다 (%s). 즉시 재시도하지 마세요.', exc)
+            return
         except NeedToLoginError:
+            if client is not None:
+                client.close()
             client = None
             failures += 1
             LOG.warning('세션 만료. 다음 주기에 재로그인합니다.')
         except Exception as exc:
             failures += 1
+            if client is not None:
+                client.close()
             client = None
-            LOG.error('조회/알림 실패 (%s), 연속 %d회. 계정·연결·라이브러리 호환성을 확인하세요.', type(exc).__name__, failures)
+            LOG.error('조회/알림 실패 (%s: %s), 연속 %d회. 계정·연결·라이브러리 호환성을 확인하세요.',
+                type(exc).__name__, exc, failures)
             if args.once:
                 raise SystemExit(1)
         if args.once:
