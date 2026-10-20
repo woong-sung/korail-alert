@@ -51,7 +51,7 @@ def main():
     if args.test_notify:
         notify('코레일 알림 테스트: 텔레그램 연결 성공')
         return
-    for key in ('KORAIL_ID', 'KORAIL_PASSWORD', 'X_DYNAPATH_M_TOKEN'):
+    for key in ('KORAIL_ID', 'KORAIL_PASSWORD'):
         if not os.getenv(key):
             parser.error(key + ' 설정 필요')
     date = os.getenv('TRAVEL_DATE', '20261107')
@@ -91,7 +91,6 @@ def main():
                 headers = dict(client._session.headers)
                 client._session = TimedSession()
                 client._session.headers.update(headers)
-                client._session.headers['x-dynapath-m-token'] = os.environ['X_DYNAPATH_M_TOKEN']
                 if not client.login():
                     raise RuntimeError('login failed')
             matched = set()
