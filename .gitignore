@@ -1,4 +1,5 @@
 .env
+.venv/
 .korail-android-id
 __pycache__/
 *.log

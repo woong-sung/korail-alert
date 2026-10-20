@@ -9,7 +9,6 @@ import signal
 import threading
 import time
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -21,6 +20,7 @@ from pykorail import (
 STOP = threading.Event()
 LOG = logging.getLogger('korail-alert')
 DEVICE_ID_FILE = Path(__file__).with_name('.korail-android-id')
+KST = dt.timezone(dt.timedelta(hours=9))
 
 
 def create_client(korail_id, korail_password):
@@ -95,7 +95,7 @@ def main():
     last_sent = {}
     failures = 0
     while not STOP.is_set():
-        now = dt.datetime.now(ZoneInfo('Asia/Seoul'))
+        now = dt.datetime.now(KST)
         pending = [t for t in times if dt.datetime.combine(day, dt.time(int(t[:2]), int(t[2:])), tzinfo=now.tzinfo) > now]
         if not pending:
             LOG.info('대상 열차 출발 시각이 모두 지나 종료합니다.')
